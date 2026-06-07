@@ -1,0 +1,44 @@
+// fizz_persona.examples — few-shot 例文集 (examples.tsv)。
+//
+// オンディスク形式は 1 行 1 例の TSV: `質問<TAB>回答` (3 列目以降は無視)。
+// brain の few-shot-retriever は入力コメントに似た例を k 件引いて
+// プロンプトに注入する。parse / format の round-trip がこの形式の定義。
+
+type FewShotExample: Codec = {
+  question: String,
+  answer: String,
+}
+
+local fn parse_line(line: String) -> Option[FewShotExample] = {
+  let parts = string.split(line, "\t")
+  if list.len(parts) < 2 then none
+  else {
+    let q = string.trim(list.get(parts, 0) ?? "")
+    let a = string.trim(list.get(parts, 1) ?? "")
+    if q == "" or a == "" then none
+    else some(FewShotExample { question: q, answer: a })
+  }
+}
+
+// TSV テキスト → 例文リスト。不正な行 (列不足・空欄) は黙って読み飛ばす。
+fn parse_examples_tsv(text: String) -> List[FewShotExample] =
+  list.filter_map(string.lines(text), parse_line)
+
+// 例文リスト → 正規 TSV テキスト (末尾改行つき)。
+fn format_examples_tsv(examples: List[FewShotExample]) -> String =
+  list.fold(examples, "", (acc, ex) => acc + "${ex.question}\t${ex.answer}\n")
+
+// ── in-file contract tests ───────────────────────────────────────────
+
+test "examples tsv roundtrips" {
+  let examples = [
+    FewShotExample { question: "今日なにしてたの？", answer: "[happy]ずっと配信の準備してたよ！" },
+    FewShotExample { question: "かわいいね", answer: "[shy][fx:blush]え、急に言わないでよ…" },
+  ]
+  assert_eq(parse_examples_tsv(format_examples_tsv(examples)), examples)
+}
+
+test "malformed tsv lines are skipped" {
+  let text = "質問だけで答えなし\n\nQ\tA\n\tだけ先頭タブ\n"
+  assert_eq(parse_examples_tsv(text), [FewShotExample { question: "Q", answer: "A" }])
+}

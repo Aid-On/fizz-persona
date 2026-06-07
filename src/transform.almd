@@ -1,0 +1,39 @@
+// fizz_persona.transform — 回答変換パターン (transforms.json)。
+//
+// 「どう答えるか」の構造を有限個のパターンに限定する宣言。
+// brain は trigger の suggest からこのリスト内の transform を選び、
+// renderer は renderer_hint に従って文面化する。LLM の任意性を
+// パターン選択に閉じ込めるのがこの契約の目的。
+
+type Transform: Codec = {
+  // 例: "responsibility-swap" / "role-invert" / "complete-partial"。
+  name: String,
+  description: String,
+  // 選択時の事前重み。
+  weight: Float,
+  // この transform が合う入力の特徴 (自然文ヒント)。
+  pattern_hints: List[String],
+  // renderer への文面化指示 (レジスタ・文数など)。
+  renderer_hint: String,
+}
+
+type Transforms: Codec = {
+  transforms: List[Transform],
+}
+
+// ── in-file contract tests ───────────────────────────────────────────
+
+test "transforms codec roundtrips" {
+  let t = Transforms {
+    transforms: [
+      Transform {
+        name: "responsibility-swap",
+        description: "入力の暗黙の責任主体を相手側に swap",
+        weight: 1.0,
+        pattern_hints: ["○○のせいで", "自虐 / 責任転嫁系の冗談"],
+        renderer_hint: "形式的否認 + 相手側の問題に再分類。1-2 文。",
+      },
+    ],
+  }
+  assert_eq(Transforms.decode(Transforms.encode(t)), ok(t))
+}

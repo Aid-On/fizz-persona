@@ -1,0 +1,51 @@
+// fizz_persona — persona のオンディスク形式契約。
+//
+// persona は 1 ディレクトリ = 1 キャラクター:
+//
+//   personae/<name>/
+//     spec.json         → identity.PersonaSpec  (入口・他ファイルへの参照)
+//     system.md         → String                (renderer 指示書・そのまま読む)
+//     voice.json        → voice.VoiceProfile    (レジスタ / 長さ / 自称)
+//     world.json        → world.World           (世界資産)
+//     transforms.json   → transform.Transforms  (回答変換パターン)
+//     triggers.json     → trigger.Triggers      (入力 → transform prior)
+//     examples.tsv      → examples (few-shot 例文)
+//
+// このパッケージは「形式」だけを定める。ファイル IO を伴う読み込みは
+// persona-loader 部品の責務 (このパッケージは fs に依存しない)。
+
+import self.identity
+import self.voice
+import self.world
+import self.transform
+import self.trigger
+import self.examples
+
+// 全ファイルを読み込んだ後のメモリ上の集約。persona-loader の出力型。
+type Persona = {
+  spec: identity.PersonaSpec,
+  // system.md の生テキスト。
+  system_prompt: String,
+  voice: voice.VoiceProfile,
+  world: world.World,
+  transforms: transform.Transforms,
+  triggers: trigger.Triggers,
+  examples: List[examples.FewShotExample],
+}
+
+let VERSION = "0.1.0"
+
+// 構造的な妥当性検査 (ファイル間整合)。loader が読み込み後に呼ぶ。
+// 違反は人間可読のメッセージで返す。
+fn validate(p: Persona) -> Result[Unit, String] = {
+  guard p.spec.name != "" else err("spec.name must not be empty")
+  guard p.spec.greeting != "" else err("spec.greeting must not be empty")
+  guard p.system_prompt != "" else err("system.md must not be empty")
+  // triggers の suggest は transforms に実在する名前を指すこと。
+  let names = list.map(p.transforms.transforms, (t) => t.name)
+  let dangling = list.fold(p.triggers.rules, []: List[String], (acc, rule) =>
+    acc + list.filter(rule.suggest, (s) => not list.contains(names, s)))
+  guard list.len(dangling) == 0 else
+    err("triggers reference unknown transforms: ${string.join(dangling, ", ")}")
+  ok(())
+}

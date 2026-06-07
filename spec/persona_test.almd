@@ -1,0 +1,74 @@
+// Cross-module contract tests — persona-loader と同じ目線で
+// 集約 Persona を組み立て、validate の契約を確認する。
+
+import self as persona
+import self.identity
+import self.voice
+import self.world
+import self.transform
+import self.trigger
+import self.examples
+
+local fn minimal_spec() -> identity.PersonaSpec =
+  identity.PersonaSpec {
+    name: "Shizuku",
+    display_name: "雫",
+    language_default: "ja",
+    model: "haiku",
+    self_ref: ["default": "しずく"],
+    system_base: "system.md",
+    world: "world.json",
+    transforms: "transforms.json",
+    triggers: "triggers.json",
+    voice: "voice.json",
+    voice_corpus: none,
+    greeting: "本日も配信の監視につきました。",
+    effects: identity.EffectPolicy { allowed: ["llm.invoke"] },
+  }
+
+local fn minimal_persona() -> persona.Persona =
+  persona.Persona {
+    spec: minimal_spec(),
+    system_prompt: "プランを素直に実行する。絵文字禁止。",
+    voice: voice.VoiceProfile {
+      registers: [],
+      lengths: voice.Lengths { short: "1 文", medium: "1-2 文", long: "3 文以上" },
+      self_ref_rules: ["default": "しずく"],
+    },
+    world: world.World { assets: [] },
+    transforms: transform.Transforms {
+      transforms: [
+        transform.Transform {
+          name: "responsibility-swap",
+          description: "責任主体を swap",
+          weight: 1.0,
+          pattern_hints: [],
+          renderer_hint: "1-2 文。",
+        },
+      ],
+    },
+    triggers: trigger.Triggers {
+      comment: none,
+      rules: [trigger.TriggerRule { pattern: "のせい", suggest: ["responsibility-swap"] }],
+    },
+    examples: examples.parse_examples_tsv("Q\tA\n"),
+  }
+
+test "a well-formed persona validates" {
+  assert_eq(persona.validate(minimal_persona()), ok(()))
+}
+
+test "dangling trigger suggestions are rejected" {
+  let base = minimal_persona()
+  let bad = { ...base, triggers: trigger.Triggers {
+    comment: none,
+    rules: [trigger.TriggerRule { pattern: "歌って", suggest: ["no-such-transform"] }],
+  } }
+  assert(result.is_err(persona.validate(bad)))
+}
+
+test "empty greeting is rejected" {
+  let base = minimal_persona()
+  let bad = { ...base, spec: { ...minimal_spec(), greeting: "" } }
+  assert(result.is_err(persona.validate(bad)))
+}

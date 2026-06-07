@@ -1,0 +1,59 @@
+// fizz_persona.identity — persona の統合メタスキーマ (spec.json)。
+//
+// persona ディレクトリの入口。他ファイル (system.md / voice.json /
+// world.json / transforms.json / triggers.json) への参照と、
+// キャラクターの基本属性・effect 制約を宣言する。
+//
+// オンディスクの spec.json をそのまま decode できる形 (kotodama 互換)。
+// "$schema" キーは無視してよい。
+
+// persona が使用を許可される effect の静的宣言。
+// kotodama 系ランタイムは lower-time にこのリストと突き合わせて、
+// 宣言外の effect を使う計画を LLM 呼び出し前に弾く。
+type EffectPolicy: Codec = {
+  allowed: List[String],
+}
+
+type PersonaSpec: Codec = {
+  // 内部名 (例: "Shizuku")。
+  name: String,
+  // 表示名 (例: "雫")。
+  display_name: String,
+  // 既定言語 (例: "ja")。
+  language_default: String,
+  // 既定 LLM モデルのヒント (例: "haiku")。
+  model: String,
+  // 自称の使い分け (例: default → "しずく", kawaii → "しずくちゃん")。
+  self_ref: Map[String, String],
+  // 以下は persona ディレクトリ相対の参照パス。
+  system_base: String,
+  world: String,
+  transforms: String,
+  triggers: String,
+  voice: String,
+  voice_corpus: Option[String],
+  // 配信開始時の決定論的な挨拶文。
+  greeting: String,
+  effects: EffectPolicy,
+}
+
+// ── in-file contract tests ───────────────────────────────────────────
+
+test "persona spec codec roundtrips" {
+  let s = PersonaSpec {
+    name: "Shizuku",
+    display_name: "雫",
+    language_default: "ja",
+    model: "haiku",
+    self_ref: ["default": "しずく", "kawaii": "しずくちゃん"],
+    system_base: "system.md",
+    world: "world.json",
+    transforms: "transforms.json",
+    triggers: "triggers.json",
+    voice: "voice.json",
+    voice_corpus: some("voice-corpus.json"),
+    greeting: "本日も配信の監視につきました。",
+    effects: EffectPolicy { allowed: ["llm.invoke", "llm.haiku"] },
+  }
+  assert_eq(PersonaSpec.decode(PersonaSpec.encode(s)), ok(s))
+}

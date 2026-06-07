@@ -1,0 +1,49 @@
+// fizz_persona.voice — 発話スタイル定義 (voice.json)。
+//
+// 「何を言うか」が決まった後、「どう言うか」を制約する宣言。
+// renderer (system.md) はこの register / length ヒントに従う。
+
+// 発話レジスタ (例: ですます毒舌 / ハイテンションギャル / 静共感)。
+type Register: Codec = {
+  name: String,
+  description: String,
+  // そのレジスタを特徴づける言い回し。
+  markers: List[String],
+  tone: String,
+}
+
+// 返答の長さ目安。値は自然文の指示 (例: "1 文 (10〜30 文字程度)")。
+type Lengths: Codec = {
+  short: String,
+  medium: String,
+  long: String,
+}
+
+type VoiceProfile: Codec = {
+  registers: List[Register],
+  lengths: Lengths,
+  // 自称の使い分けルール (例: default → "しずく")。
+  self_ref_rules: Map[String, String],
+}
+
+// ── in-file contract tests ───────────────────────────────────────────
+
+test "voice profile codec roundtrips" {
+  let v = VoiceProfile {
+    registers: [
+      Register {
+        name: "ですます毒舌",
+        description: "敬語形式 + 鋭いひと刺し。デフォルト。",
+        markers: ["〜です", "〜ですよ"],
+        tone: "形式的に丁寧、内容は容赦なし",
+      },
+    ],
+    lengths: Lengths {
+      short: "1 文 (10〜30 文字程度)",
+      medium: "1-2 文 (30〜80 文字程度)",
+      long: "3 文以上",
+    },
+    self_ref_rules: ["default": "しずく"],
+  }
+  assert_eq(VoiceProfile.decode(VoiceProfile.encode(v)), ok(v))
+}

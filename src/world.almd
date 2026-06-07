@@ -1,0 +1,38 @@
+// fizz_persona.world — キャラクター世界資産 (world.json)。
+//
+// キャラの背景に常駐する人物・概念・ネタの宣言。brain は話題が合致した
+// ときにこれを引いて返答へ織り込む。
+
+type WorldAsset: Codec = {
+  // 例: "あき先生" / "ご主人様"。
+  name: String,
+  // 例: "creator" / "streamer" / "viewer-sponsor"。
+  role: String,
+  // その資産の説明・使い方。
+  note: String,
+  // 関連テーマのキーワード。
+  themes: List[String],
+  // どういう場面で持ち出すかの自然文ヒント。
+  when_to_invoke: String,
+}
+
+type World: Codec = {
+  assets: List[WorldAsset],
+}
+
+// ── in-file contract tests ───────────────────────────────────────────
+
+test "world codec roundtrips" {
+  let w = World {
+    assets: [
+      WorldAsset {
+        name: "あき先生",
+        role: "creator",
+        note: "親権者・配信運営者。問題はここに通報する三角構造を作る",
+        themes: ["メタ運営", "通報"],
+        when_to_invoke: "管理運営の話題、責任を回避したい時",
+      },
+    ],
+  }
+  assert_eq(World.decode(World.encode(w)), ok(w))
+}

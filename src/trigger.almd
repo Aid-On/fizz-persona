@@ -1,0 +1,49 @@
+// fizz_persona.trigger — 入力パターン → 推奨 transform の prior (triggers.json)。
+//
+// pattern は単純な部分文字列マッチで照合する (正規表現ではない)。
+// analyzer が transform 候補を絞るときのヒントであり、強制ではない。
+
+type TriggerRule: Codec = {
+  // 入力コメントに含まれていたら発火する部分文字列。
+  pattern: String,
+  // 推奨する transform 名 (fizz_persona.transform の name を参照)。
+  suggest: List[String],
+}
+
+type Triggers: Codec = {
+  // ファイル先頭の説明コメント (オンディスク互換のため保持)。
+  comment: Option[String],
+  rules: List[TriggerRule],
+}
+
+// 入力テキストに合致する全ルールの suggest を出現順で集める。
+// 重複は維持する (重みとして扱う・潰すは brain 側の方針に委ねる)。
+fn match_triggers(t: Triggers, input: String) -> List[String] =
+  list.fold(t.rules, []: List[String], (acc, rule) =>
+    if string.contains(input, rule.pattern) then acc + rule.suggest
+    else acc)
+
+// ── in-file contract tests ───────────────────────────────────────────
+
+test "triggers codec roundtrips" {
+  let t = Triggers {
+    comment: some("input pattern → 推奨 transform の prior"),
+    rules: [
+      TriggerRule { pattern: "おすすめ", suggest: ["list-parody"] },
+      TriggerRule { pattern: "...", suggest: ["complete-partial"] },
+    ],
+  }
+  assert_eq(Triggers.decode(Triggers.encode(t)), ok(t))
+}
+
+test "trigger matching collects suggestions in order" {
+  let t = Triggers {
+    comment: none,
+    rules: [
+      TriggerRule { pattern: "おすすめ", suggest: ["list-parody"] },
+      TriggerRule { pattern: "教えて", suggest: ["list-parody", "face-value-with-stamp"] },
+    ],
+  }
+  assert_eq(match_triggers(t, "おすすめ教えて"), ["list-parody", "list-parody", "face-value-with-stamp"])
+  assert_eq(match_triggers(t, "こんにちは"), []: List[String])
+}
