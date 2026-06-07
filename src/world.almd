@@ -1,9 +1,11 @@
 // fizz_persona.world — キャラクター世界資産 (world.json)。
 //
 // キャラの背景に常駐する人物・概念・ネタの宣言。brain は話題が合致した
-// ときにこれを引いて返答へ織り込む。
+// ときにこれを引いて返答へ織り込む。コーデックは手書きが契約の正。
 
-type WorldAsset: Codec = {
+import json
+
+type WorldAsset = {
   // 例: "あき先生" / "ご主人様"。
   name: String,
   // 例: "creator" / "streamer" / "viewer-sponsor"。
@@ -16,13 +18,63 @@ type WorldAsset: Codec = {
   when_to_invoke: String,
 }
 
-type World: Codec = {
+type World = {
   assets: List[WorldAsset],
 }
 
+// ── JSON ヘルパ (local) ──────────────────────────────────────────────
+
+local fn jget(v: Value, key: String) -> Value = value.get(v, key) ?? value.null()
+
+local fn jstr(v: Value, key: String) -> Option[String] =
+  result.to_option(value.as_string(jget(v, key)))
+
+local fn jarr(v: Value, key: String) -> List[Value] =
+  result.unwrap_or(value.as_array(jget(v, key)), [])
+
+local fn jstr_list(v: Value, key: String) -> List[String] =
+  list.filter_map(jarr(v, key), (item) => result.to_option(value.as_string(item)))
+
+// ── コーデック ───────────────────────────────────────────────────────
+
+local fn asset_encode(a: WorldAsset) -> Value =
+  value.object([
+    ("name", value.str(a.name)),
+    ("role", value.str(a.role)),
+    ("note", value.str(a.note)),
+    ("themes", value.array(list.map(a.themes, (t) => value.str(t)))),
+    ("when_to_invoke", value.str(a.when_to_invoke)),
+  ])
+
+local fn asset_decode(v: Value) -> Option[WorldAsset] = {
+  let name = jstr(v, "name") ?? ""
+  guard name != "" else none
+  some(WorldAsset {
+    name: name,
+    role: jstr(v, "role") ?? "",
+    note: jstr(v, "note") ?? "",
+    themes: jstr_list(v, "themes"),
+    when_to_invoke: jstr(v, "when_to_invoke") ?? "",
+  })
+}
+
+fn world_encode(w: World) -> Value =
+  value.object([("assets", value.array(list.map(w.assets, asset_encode)))])
+
+fn world_decode(v: Value) -> Result[World, String] =
+  ok(World { assets: list.filter_map(jarr(v, "assets"), asset_decode) })
+
+fn world_to_json(w: World) -> String = json.stringify(world_encode(w))
+
+fn world_from_json(text: String) -> Result[World, String] =
+  match json.parse(text) {
+    ok(v)  => world_decode(v),
+    err(e) => err(e),
+  }
+
 // ── in-file contract tests ───────────────────────────────────────────
 
-test "world codec roundtrips" {
+test "world roundtrips" {
   let w = World {
     assets: [
       WorldAsset {
@@ -34,5 +86,12 @@ test "world codec roundtrips" {
       },
     ],
   }
-  assert_eq(World.decode(World.encode(w)), ok(w))
+  assert_eq(world_from_json(world_to_json(w)), ok(w))
+}
+
+test "nameless assets are skipped" {
+  match world_from_json("{\"assets\": [{\"role\": \"x\"}, {\"name\": \"ご主人様\", \"role\": \"viewer-sponsor\"}]}") {
+    ok(w)  => assert_eq(list.len(w.assets), 1),
+    err(_) => assert(false),
+  }
 }

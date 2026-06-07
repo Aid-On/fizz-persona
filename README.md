@@ -57,15 +57,13 @@ personae/<name>/
 ## Usage
 
 ```almide
-import json
 import fizz_persona.identity
 
 // loader 部品が読んだ spec.json テキストを decode する例
+// (コーデックは手書き — almide の deriving Codec は variant payload
+//  decode 未実装のため使っていない)
 fn parse_spec(text: String) -> Result[identity.PersonaSpec, String] =
-  match json.parse(text) {
-    ok(v)  => identity.PersonaSpec.decode(v),
-    err(e) => err(e),
-  }
+  identity.spec_from_json(text)
 ```
 
 ## Tests

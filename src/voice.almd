@@ -2,9 +2,12 @@
 //
 // 「何を言うか」が決まった後、「どう言うか」を制約する宣言。
 // renderer (system.md) はこの register / length ヒントに従う。
+// コーデックは手書きが契約の正。未知キーは無視。
+
+import json
 
 // 発話レジスタ (例: ですます毒舌 / ハイテンションギャル / 静共感)。
-type Register: Codec = {
+type Register = {
   name: String,
   description: String,
   // そのレジスタを特徴づける言い回し。
@@ -13,23 +16,110 @@ type Register: Codec = {
 }
 
 // 返答の長さ目安。値は自然文の指示 (例: "1 文 (10〜30 文字程度)")。
-type Lengths: Codec = {
+type Lengths = {
   short: String,
   medium: String,
   long: String,
 }
 
-type VoiceProfile: Codec = {
+type VoiceProfile = {
   registers: List[Register],
   lengths: Lengths,
   // 自称の使い分けルール (例: default → "しずく")。
   self_ref_rules: Map[String, String],
 }
 
+// ── JSON ヘルパ (local) ──────────────────────────────────────────────
+
+local fn jget(v: Value, key: String) -> Value = value.get(v, key) ?? value.null()
+
+local fn jstr(v: Value, key: String) -> Option[String] =
+  result.to_option(value.as_string(jget(v, key)))
+
+local fn jarr(v: Value, key: String) -> List[Value] =
+  result.unwrap_or(value.as_array(jget(v, key)), [])
+
+local fn jstr_list(v: Value, key: String) -> List[String] =
+  list.filter_map(jarr(v, key), (item) => result.to_option(value.as_string(item)))
+
+local fn jstr_map(v: Value, key: String) -> Map[String, String] = {
+  let o = jget(v, key)
+  let ks: List[String] = json.keys(o)
+  var m: Map[String, String] = [:]
+  for k in ks {
+    match result.to_option(value.as_string(value.get(o, k) ?? value.null())) {
+      some(s) => { m[k] = s },
+      none    => (),
+    }
+  }
+  m
+}
+
+local fn str_map_to_value(m: Map[String, String]) -> Value = {
+  var pairs: List[(String, Value)] = []
+  for (k, s) in m {
+    pairs = pairs + [(k, value.str(s))]
+  }
+  value.object(pairs)
+}
+
+// ── コーデック ───────────────────────────────────────────────────────
+
+local fn register_encode(r: Register) -> Value =
+  value.object([
+    ("name", value.str(r.name)),
+    ("description", value.str(r.description)),
+    ("markers", value.array(list.map(r.markers, (m) => value.str(m)))),
+    ("tone", value.str(r.tone)),
+  ])
+
+local fn register_decode(v: Value) -> Option[Register] = {
+  let name = jstr(v, "name") ?? ""
+  guard name != "" else none
+  some(Register {
+    name: name,
+    description: jstr(v, "description") ?? "",
+    markers: jstr_list(v, "markers"),
+    tone: jstr(v, "tone") ?? "",
+  })
+}
+
+fn voice_encode(p: VoiceProfile) -> Value =
+  value.object([
+    ("registers", value.array(list.map(p.registers, register_encode))),
+    ("lengths", value.object([
+      ("short", value.str(p.lengths.short)),
+      ("medium", value.str(p.lengths.medium)),
+      ("long", value.str(p.lengths.long)),
+    ])),
+    ("self_ref_rules", str_map_to_value(p.self_ref_rules)),
+  ])
+
+fn voice_decode(v: Value) -> Result[VoiceProfile, String] = {
+  let lv = jget(v, "lengths")
+  ok(VoiceProfile {
+    registers: list.filter_map(jarr(v, "registers"), register_decode),
+    lengths: Lengths {
+      short: jstr(lv, "short") ?? "",
+      medium: jstr(lv, "medium") ?? "",
+      long: jstr(lv, "long") ?? "",
+    },
+    self_ref_rules: jstr_map(v, "self_ref_rules"),
+  })
+}
+
+fn voice_to_json(p: VoiceProfile) -> String = json.stringify(voice_encode(p))
+
+fn voice_from_json(text: String) -> Result[VoiceProfile, String] =
+  match json.parse(text) {
+    ok(v)  => voice_decode(v),
+    err(e) => err(e),
+  }
+
 // ── in-file contract tests ───────────────────────────────────────────
 
-test "voice profile codec roundtrips" {
-  let v = VoiceProfile {
+test "voice profile roundtrips" {
+  let p = VoiceProfile {
     registers: [
       Register {
         name: "ですます毒舌",
@@ -45,5 +135,26 @@ test "voice profile codec roundtrips" {
     },
     self_ref_rules: ["default": "しずく"],
   }
-  assert_eq(VoiceProfile.decode(VoiceProfile.encode(v)), ok(v))
+  assert_eq(voice_from_json(voice_to_json(p)), ok(p))
+}
+
+test "kotodama voice.json shape decodes" {
+  let on_disk = r"""
+    {
+      "registers": [
+        {"name": "静共感", "description": "重い話。短文。",
+         "markers": ["うん…そっか"], "tone": "受け止める"}
+      ],
+      "lengths": {"short": "1 文", "medium": "1-2 文", "long": "3 文以上"},
+      "self_ref_rules": {"default": "しずく", "kawaii": "しずくちゃん"}
+    }
+  """
+  match voice_from_json(on_disk) {
+    ok(p) => {
+      assert_eq(list.len(p.registers), 1)
+      assert_eq(p.lengths.medium, "1-2 文")
+      assert_eq(p.self_ref_rules["kawaii"] ?? "", "しずくちゃん")
+    },
+    err(e) => { eprintln(e); assert(false) },
+  }
 }

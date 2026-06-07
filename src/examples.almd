@@ -4,7 +4,7 @@
 // brain の few-shot-retriever は入力コメントに似た例を k 件引いて
 // プロンプトに注入する。parse / format の round-trip がこの形式の定義。
 
-type FewShotExample: Codec = {
+type FewShotExample = {
   question: String,
   answer: String,
 }

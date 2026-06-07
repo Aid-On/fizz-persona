@@ -4,17 +4,19 @@
 // world.json / transforms.json / triggers.json) への参照と、
 // キャラクターの基本属性・effect 制約を宣言する。
 //
-// オンディスクの spec.json をそのまま decode できる形 (kotodama 互換)。
-// "$schema" キーは無視してよい。
+// オンディスクの spec.json をそのまま decode できる (kotodama 互換)。
+// "$schema" など未知のキーは無視する。コーデックは手書きが契約の正。
+
+import json
 
 // persona が使用を許可される effect の静的宣言。
 // kotodama 系ランタイムは lower-time にこのリストと突き合わせて、
 // 宣言外の effect を使う計画を LLM 呼び出し前に弾く。
-type EffectPolicy: Codec = {
+type EffectPolicy = {
   allowed: List[String],
 }
 
-type PersonaSpec: Codec = {
+type PersonaSpec = {
   // 内部名 (例: "Shizuku")。
   name: String,
   // 表示名 (例: "雫")。
@@ -37,9 +39,92 @@ type PersonaSpec: Codec = {
   effects: EffectPolicy,
 }
 
+// ── JSON ヘルパ (local) ──────────────────────────────────────────────
+
+local fn jget(v: Value, key: String) -> Value = value.get(v, key) ?? value.null()
+
+local fn jstr(v: Value, key: String) -> Option[String] =
+  result.to_option(value.as_string(jget(v, key)))
+
+local fn jstr_list(v: Value, key: String) -> List[String] =
+  list.filter_map(
+    result.unwrap_or(value.as_array(jget(v, key)), []),
+    (item) => result.to_option(value.as_string(item)))
+
+local fn jstr_map(v: Value, key: String) -> Map[String, String] = {
+  let o = jget(v, key)
+  let ks: List[String] = json.keys(o)
+  var m: Map[String, String] = [:]
+  for k in ks {
+    match result.to_option(value.as_string(value.get(o, k) ?? value.null())) {
+      some(s) => { m[k] = s },
+      none    => (),
+    }
+  }
+  m
+}
+
+local fn str_map_to_value(m: Map[String, String]) -> Value = {
+  var pairs: List[(String, Value)] = []
+  for (k, s) in m {
+    pairs = pairs + [(k, value.str(s))]
+  }
+  value.object(pairs)
+}
+
+// ── コーデック ───────────────────────────────────────────────────────
+
+fn spec_encode(s: PersonaSpec) -> Value =
+  value.object(
+    [
+      ("name", value.str(s.name)),
+      ("display_name", value.str(s.display_name)),
+      ("language_default", value.str(s.language_default)),
+      ("model", value.str(s.model)),
+      ("self_ref", str_map_to_value(s.self_ref)),
+      ("system_base", value.str(s.system_base)),
+      ("world", value.str(s.world)),
+      ("transforms", value.str(s.transforms)),
+      ("triggers", value.str(s.triggers)),
+      ("voice", value.str(s.voice)),
+    ]
+      + (match s.voice_corpus { some(c) => [("voice_corpus", value.str(c))], none => [] })
+      + [
+          ("greeting", value.str(s.greeting)),
+          ("effects", value.object([("allowed", value.array(list.map(s.effects.allowed, (a) => value.str(a))))])),
+        ])
+
+fn spec_decode(v: Value) -> Result[PersonaSpec, String] = {
+  let name = jstr(v, "name") ?? ""
+  guard name != "" else err("spec: missing name")
+  ok(PersonaSpec {
+    name: name,
+    display_name: jstr(v, "display_name") ?? name,
+    language_default: jstr(v, "language_default") ?? "ja",
+    model: jstr(v, "model") ?? "",
+    self_ref: jstr_map(v, "self_ref"),
+    system_base: jstr(v, "system_base") ?? "system.md",
+    world: jstr(v, "world") ?? "world.json",
+    transforms: jstr(v, "transforms") ?? "transforms.json",
+    triggers: jstr(v, "triggers") ?? "triggers.json",
+    voice: jstr(v, "voice") ?? "voice.json",
+    voice_corpus: jstr(v, "voice_corpus"),
+    greeting: jstr(v, "greeting") ?? "",
+    effects: EffectPolicy { allowed: jstr_list(jget(v, "effects"), "allowed") },
+  })
+}
+
+fn spec_to_json(s: PersonaSpec) -> String = json.stringify(spec_encode(s))
+
+fn spec_from_json(text: String) -> Result[PersonaSpec, String] =
+  match json.parse(text) {
+    ok(v)  => spec_decode(v),
+    err(e) => err(e),
+  }
+
 // ── in-file contract tests ───────────────────────────────────────────
 
-test "persona spec codec roundtrips" {
+test "persona spec roundtrips" {
   let s = PersonaSpec {
     name: "Shizuku",
     display_name: "雫",
@@ -55,5 +140,39 @@ test "persona spec codec roundtrips" {
     greeting: "本日も配信の監視につきました。",
     effects: EffectPolicy { allowed: ["llm.invoke", "llm.haiku"] },
   }
-  assert_eq(PersonaSpec.decode(PersonaSpec.encode(s)), ok(s))
+  assert_eq(spec_from_json(spec_to_json(s)), ok(s))
+}
+
+test "kotodama spec.json decodes ($schema and unknown keys ignored)" {
+  let on_disk = r"""
+    {
+      "$schema": "../schema/persona-spec.json",
+      "name": "Shizuku",
+      "display_name": "雫",
+      "language_default": "ja",
+      "model": "haiku",
+      "self_ref": {"default": "しずく"},
+      "system_base": "system.md",
+      "world": "world.json",
+      "transforms": "transforms.json",
+      "triggers": "triggers.json",
+      "voice": "voice.json",
+      "voice_corpus": "voice-corpus.json",
+      "greeting": "ご主人様、よろしくお願いします。",
+      "effects": {"allowed": ["llm.invoke", "llm.haiku"]}
+    }
+  """
+  match spec_from_json(on_disk) {
+    ok(s) => {
+      assert_eq(s.name, "Shizuku")
+      assert_eq(s.display_name, "雫")
+      assert_eq(s.self_ref["default"] ?? "", "しずく")
+      assert_eq(s.effects.allowed, ["llm.invoke", "llm.haiku"])
+    },
+    err(e) => { eprintln(e); assert(false) },
+  }
+}
+
+test "missing name is rejected" {
+  assert(result.is_err(spec_from_json("{\"display_name\":\"x\"}")))
 }

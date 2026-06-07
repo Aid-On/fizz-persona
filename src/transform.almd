@@ -4,8 +4,11 @@
 // brain は trigger の suggest からこのリスト内の transform を選び、
 // renderer は renderer_hint に従って文面化する。LLM の任意性を
 // パターン選択に閉じ込めるのがこの契約の目的。
+// コーデックは手書きが契約の正。
 
-type Transform: Codec = {
+import json
+
+type Transform = {
   // 例: "responsibility-swap" / "role-invert" / "complete-partial"。
   name: String,
   description: String,
@@ -17,14 +20,75 @@ type Transform: Codec = {
   renderer_hint: String,
 }
 
-type Transforms: Codec = {
+type Transforms = {
   transforms: List[Transform],
 }
 
+// ── JSON ヘルパ (local) ──────────────────────────────────────────────
+
+local fn jget(v: Value, key: String) -> Value = value.get(v, key) ?? value.null()
+
+local fn jstr(v: Value, key: String) -> Option[String] =
+  result.to_option(value.as_string(jget(v, key)))
+
+local fn jarr(v: Value, key: String) -> List[Value] =
+  result.unwrap_or(value.as_array(jget(v, key)), [])
+
+local fn jstr_list(v: Value, key: String) -> List[String] =
+  list.filter_map(jarr(v, key), (item) => result.to_option(value.as_string(item)))
+
+local fn jnum(v: Value, key: String) -> Option[Float] = {
+  let raw = jget(v, key)
+  match result.to_option(value.as_float(raw)) {
+    some(f) => some(f),
+    none    => match result.to_option(value.as_int(raw)) {
+      some(n) => some(int.to_float(n)),
+      none    => none,
+    },
+  }
+}
+
+// ── コーデック ───────────────────────────────────────────────────────
+
+local fn transform_encode(t: Transform) -> Value =
+  value.object([
+    ("name", value.str(t.name)),
+    ("description", value.str(t.description)),
+    ("weight", value.float(t.weight)),
+    ("pattern_hints", value.array(list.map(t.pattern_hints, (h) => value.str(h)))),
+    ("renderer_hint", value.str(t.renderer_hint)),
+  ])
+
+local fn transform_decode(v: Value) -> Option[Transform] = {
+  let name = jstr(v, "name") ?? ""
+  guard name != "" else none
+  some(Transform {
+    name: name,
+    description: jstr(v, "description") ?? "",
+    weight: jnum(v, "weight") ?? 1.0,
+    pattern_hints: jstr_list(v, "pattern_hints"),
+    renderer_hint: jstr(v, "renderer_hint") ?? "",
+  })
+}
+
+fn transforms_encode(ts: Transforms) -> Value =
+  value.object([("transforms", value.array(list.map(ts.transforms, transform_encode)))])
+
+fn transforms_decode(v: Value) -> Result[Transforms, String] =
+  ok(Transforms { transforms: list.filter_map(jarr(v, "transforms"), transform_decode) })
+
+fn transforms_to_json(ts: Transforms) -> String = json.stringify(transforms_encode(ts))
+
+fn transforms_from_json(text: String) -> Result[Transforms, String] =
+  match json.parse(text) {
+    ok(v)  => transforms_decode(v),
+    err(e) => err(e),
+  }
+
 // ── in-file contract tests ───────────────────────────────────────────
 
-test "transforms codec roundtrips" {
-  let t = Transforms {
+test "transforms roundtrip" {
+  let ts = Transforms {
     transforms: [
       Transform {
         name: "responsibility-swap",
@@ -35,5 +99,23 @@ test "transforms codec roundtrips" {
       },
     ],
   }
-  assert_eq(Transforms.decode(Transforms.encode(t)), ok(t))
+  assert_eq(transforms_from_json(transforms_to_json(ts)), ok(ts))
+}
+
+test "weight defaults to 1.0 and integer weights are accepted" {
+  match transforms_from_json("{\"transforms\": [{\"name\": \"a\"}, {\"name\": \"b\", \"weight\": 2}]}") {
+    ok(ts) => {
+      assert_eq(list.len(ts.transforms), 2)
+      let a = list.first(ts.transforms)
+      match a {
+        some(t) => assert_eq(t.weight, 1.0),
+        none    => assert(false),
+      }
+      match list.last(ts.transforms) {
+        some(t) => assert_eq(t.weight, 2.0),
+        none    => assert(false),
+      }
+    },
+    err(_) => assert(false),
+  }
 }

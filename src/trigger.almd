@@ -2,19 +2,70 @@
 //
 // pattern は単純な部分文字列マッチで照合する (正規表現ではない)。
 // analyzer が transform 候補を絞るときのヒントであり、強制ではない。
+// コーデックは手書きが契約の正。
 
-type TriggerRule: Codec = {
+import json
+
+type TriggerRule = {
   // 入力コメントに含まれていたら発火する部分文字列。
   pattern: String,
   // 推奨する transform 名 (fizz_persona.transform の name を参照)。
   suggest: List[String],
 }
 
-type Triggers: Codec = {
+type Triggers = {
   // ファイル先頭の説明コメント (オンディスク互換のため保持)。
   comment: Option[String],
   rules: List[TriggerRule],
 }
+
+// ── JSON ヘルパ (local) ──────────────────────────────────────────────
+
+local fn jget(v: Value, key: String) -> Value = value.get(v, key) ?? value.null()
+
+local fn jstr(v: Value, key: String) -> Option[String] =
+  result.to_option(value.as_string(jget(v, key)))
+
+local fn jarr(v: Value, key: String) -> List[Value] =
+  result.unwrap_or(value.as_array(jget(v, key)), [])
+
+local fn jstr_list(v: Value, key: String) -> List[String] =
+  list.filter_map(jarr(v, key), (item) => result.to_option(value.as_string(item)))
+
+// ── コーデック ───────────────────────────────────────────────────────
+
+local fn rule_encode(r: TriggerRule) -> Value =
+  value.object([
+    ("pattern", value.str(r.pattern)),
+    ("suggest", value.array(list.map(r.suggest, (s) => value.str(s)))),
+  ])
+
+local fn rule_decode(v: Value) -> Option[TriggerRule] = {
+  let pattern = jstr(v, "pattern") ?? ""
+  guard pattern != "" else none
+  some(TriggerRule { pattern: pattern, suggest: jstr_list(v, "suggest") })
+}
+
+fn triggers_encode(t: Triggers) -> Value =
+  value.object(
+    (match t.comment { some(c) => [("comment", value.str(c))], none => [] })
+      + [("rules", value.array(list.map(t.rules, rule_encode)))])
+
+fn triggers_decode(v: Value) -> Result[Triggers, String] =
+  ok(Triggers {
+    comment: jstr(v, "comment"),
+    rules: list.filter_map(jarr(v, "rules"), rule_decode),
+  })
+
+fn triggers_to_json(t: Triggers) -> String = json.stringify(triggers_encode(t))
+
+fn triggers_from_json(text: String) -> Result[Triggers, String] =
+  match json.parse(text) {
+    ok(v)  => triggers_decode(v),
+    err(e) => err(e),
+  }
+
+// ── マッチング ───────────────────────────────────────────────────────
 
 // 入力テキストに合致する全ルールの suggest を出現順で集める。
 // 重複は維持する (重みとして扱う・潰すは brain 側の方針に委ねる)。
@@ -25,7 +76,7 @@ fn match_triggers(t: Triggers, input: String) -> List[String] =
 
 // ── in-file contract tests ───────────────────────────────────────────
 
-test "triggers codec roundtrips" {
+test "triggers roundtrip" {
   let t = Triggers {
     comment: some("input pattern → 推奨 transform の prior"),
     rules: [
@@ -33,7 +84,7 @@ test "triggers codec roundtrips" {
       TriggerRule { pattern: "...", suggest: ["complete-partial"] },
     ],
   }
-  assert_eq(Triggers.decode(Triggers.encode(t)), ok(t))
+  assert_eq(triggers_from_json(triggers_to_json(t)), ok(t))
 }
 
 test "trigger matching collects suggestions in order" {
@@ -46,4 +97,20 @@ test "trigger matching collects suggestions in order" {
   }
   assert_eq(match_triggers(t, "おすすめ教えて"), ["list-parody", "list-parody", "face-value-with-stamp"])
   assert_eq(match_triggers(t, "こんにちは"), []: List[String])
+}
+
+test "kotodama triggers.json shape decodes" {
+  let on_disk = r"""
+    {
+      "comment": "input pattern → transform prior",
+      "rules": [
+        {"pattern": "ギャル語", "suggest": ["face-value-with-stamp"]},
+        {"pattern": "・・・", "suggest": ["complete-partial"]}
+      ]
+    }
+  """
+  match triggers_from_json(on_disk) {
+    ok(t)  => assert_eq(list.len(t.rules), 2),
+    err(_) => assert(false),
+  }
 }
